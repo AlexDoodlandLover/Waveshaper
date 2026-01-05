@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Decrusher</title>
+    <style>
+        body { font-family: sans-serif; background: #121212; color: #e0e0e0; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .card { background: #1e1e1e; padding: 2rem; border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); width: 350px; text-align: center; }
+        input[type="file"] { margin: 20px 0; color: #bbb; }
+        .control-group { margin: 20px 0; text-align: left; }
+        label { display: block; margin-bottom: 5px; font-size: 0.9rem; color: #888; }
+        input[type="range"] { width: 100%; cursor: pointer; }
+        button { background: #6200ee; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; }
+        button:hover { background: #7c22ff; }
+        .status { margin-top: 15px; font-size: 0.8rem; color: #03dac6; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>Audio Decrusher</h2>
+    <p style="font-size: 0.8rem; color: #888;">Softens bit-crushed & 8-bit artifacts</p>
+    
+    <input type="file" id="audioFile" accept="audio/*">
+    
+    <div class="control-group">
+        <label>Smoothing (Low-Pass Filter)</label>
+        <input type="range" id="filterFreq" min="1000" max="20000" value="20000">
+    </div>
+
+    <div class="control-group">
+        <label>Warmth (Saturation)</label>
+        <input type="range" id="warmth" min="0" max="100" value="0">
+    </div>
+
+    <button id="playBtn">Play / Process</button>
+    <div id="status" class="status">Upload a file to start</div>
+</div>
+
+<script>
+    let audioCtx;
+    let source;
+    let filterNode;
+    let waveShaper;
+    let isPlaying = false;
+
+    const audioFileInput = document.getElementById('audioFile');
+    const playBtn = document.getElementById('playBtn');
+    const filterSlider = document.getElementById('filterFreq');
+    const warmthSlider = document.getElementById('warmth');
+    const status = document.getElementById('status');
+
+    function createDistortionCurve(amount) {
+        let k = amount,
+            n_samples = 44100,
+            curve = new Float32Array(n_samples),
+            deg = Math.PI / 180,
+            i = 0,
+            x;
+        for ( ; i < n_samples; ++i ) {
+            x = i * 2 / n_samples - 1;
+            curve[i] = ( 3 + k ) * x * 20 * deg / ( Math.PI + k * Math.abs(x) );
+        }
+        return curve;
+    }
+
+    async function setupAudio() {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
+        const file = audioFileInput.files[0];
+        if (!file) {
+            status.innerText = "Please select a file first!";
+            return;
+        }
+
+        const arrayBuffer = await file.arrayBuffer();
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+        if (source) source.stop();
+
+        source = audioCtx.createBufferSource();
+        source.buffer = audioBuffer;
+
+        // Filter Node: Removes high-frequency digital "ringing"
+        filterNode = audioCtx.createBiquadFilter();
+        filterNode.type = "lowpass";
+        filterNode.frequency.value = filterSlider.value;
+        filterNode.Q.value = 0.7;
+
+        // Waveshaper: Adds harmonics to mask quantization noise
+        waveShaper = audioCtx.createWaveShaper();
+        waveShaper.curve = createDistortionCurve(warmthSlider.value);
+        waveShaper.oversample = '4x'; // This specifically helps reduce aliasing
+
+        source.connect(filterNode);
+        filterNode.connect(waveShaper);
+        waveShaper.connect(audioCtx.destination);
+
+        source.start(0);
+        isPlaying = true;
+        status.innerText = "Playing... Adjust sliders to clean audio.";
+    }
+
+    playBtn.addEventListener('click', () => {
+        if (isPlaying) {
+            audioCtx.close().then(() => {
+                audioCtx = null;
+                isPlaying = false;
+                playBtn.innerText = "Play / Process";
+                status.innerText = "Stopped.";
+            });
+        } else {
+            setupAudio();
+            playBtn.innerText = "Stop";
+        }
+    });
+
+    filterSlider.addEventListener('input', (e) => {
+        if (filterNode) {
+            filterNode.frequency.setTargetAtTime(e.target.value, audioCtx.currentTime, 0.1);
+        }
+    });
+
+    warmthSlider.addEventListener('input', (e) => {
+        if (waveShaper) {
+            waveShaper.curve = createDistortionCurve(e.target.value);
+        }
+    });
+</script>
+
+</body>
+</html>
